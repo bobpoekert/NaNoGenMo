@@ -28,6 +28,7 @@
 (def copyright-selector "pre")
 (def content-tags #{"p" "div"})
 (def metadata-re #"[\r\n](.*?):(.*?)[\r\n]")
+(def date-format (java.text.SimpleDateFormat. "MMM d, yyyy"))
 
 (defn resolve-metadata
   [k v]
@@ -51,6 +52,7 @@
     "h2" {:title (.trim (.text tag))}
     "h3" {:title (.trim (.text tag))}
     "img" (if-let [alt (.attr tag "alt")] {:paragraphs [alt]} {})
+    "br" {:title ""}
     {}))
 
 (defn merge-tags
@@ -59,7 +61,7 @@
   ([result-list cur]
     (let [prev (first result-list)]
       (case [(apply hash-set (keys prev)) (apply hash-set (keys cur))]
-        [#{:title :paragraphs} #{:title :paragraphs}] (cons cur result-list)
+        [#{:title :paragraphs} #{:title :paragraphs}] (conj result-list cur)
         [#{:title} #{:paragraphs}] (conj (rest result-list) (merge prev cur))
         [#{:paragraphs} #{:title}] (conj (rest result-list) (merge prev cur))
         [#{:title :paragraphs} #{:title}] (conj (rest result-list)
@@ -112,7 +114,7 @@
 
 (defn to-tree
   [text]
-  (Jsoup/parse text "UTF-8" "http://www.gutenberg.org"))
+  (Jsoup/parse text))
 
 (defn parse-content
   [text]

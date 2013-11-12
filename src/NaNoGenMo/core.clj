@@ -74,9 +74,23 @@
   [token-groups restrictiveness]
   (distinct-with #(simhash % restrictiveness) token-groups))
 
+(defmacro seq-with-open
+  "Like with-open, but for expressions that return lazy seq's.
+  Closes the file when the seq has been completely consumed."
+  [[fname fexp] body]
+  `(let [~fname ~fexp
+         f# (fn f# [cur#]
+              (lazy-seq 
+                (if (empty? cur#)
+                  (do
+                    (.close ~fname)
+                    nil)
+                  (cons (first cur#) (f# (rest cur#))))))]
+      (f# ~body)))
+
 (defn read-zipfile
   [#^File file]
-    (let [zipfile (ZipFile. file)]
+    (seq-with-open [zipfile (ZipFile. file)]
       (map
         (fn [entry]
           {
@@ -85,20 +99,13 @@
             :size (.getSize entry)
             :body (if (.isDirectory entry)
                     nil
-                    (.getInputStream zipfile entry))})
+                    (slurp (.getInputStream zipfile entry)))})
         (enumeration-seq (.entries zipfile)))))
 
 (defn read-zipfile-tree
   [dirname]
-  (mapcat read-zipfile (filter #(.endsWith (.getName %) ".zip")
-                               (file-seq (File. dirname)))))
-
-(defn parse-date
-  [fmt date]
-  (.parse
-    (java.text.SimpleDateFormat. fmt)
-    date))
-
+    (mapcat read-zipfile (filter #(.endsWith (.getName %) ".zip")
+                                 (file-seq (File. dirname)))))
 (defn date-to-json
   [#^java.util.Date date #^PrintWriter out]
   (.print out (long (/ (.getTime date) 1000))))
