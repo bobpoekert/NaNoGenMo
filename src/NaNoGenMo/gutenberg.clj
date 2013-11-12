@@ -13,9 +13,9 @@
 
 (defn is-section-heading
   [#^Element e]
-  (or (contains? #{"h1" "h2" "h3"} (.getTagName e))
-      (and (= (.getTagName e) "a")
-           (.hasAttr e "name"))))
+  (and
+    (contains? #{"h1" "h2" "h3"} (.tagName e))
+    (< (.length (.text e)) 1000)))
 
 (defn split-into-sections
   [elements]
@@ -23,57 +23,72 @@
 
 (defn traverse 
   [#^Element root]
-  (.getAllEments root))
+  (.getAllElements root))
 
 (def copyright-selector "pre")
 (def content-tags #{"p" "div"})
-(def metadata-re #"[\r\n](.*?):(.*)[\r\n]")
+(def metadata-re #"[\r\n](.*?):(.*?)[\r\n]")
 
-(def metadata-parsers (atom {}))
-
-(defmacro def-metadata-parser
-  [k args & body]
-  (do
-    (swap! metadata-parsers
-      #(assoc % (str k)
-        (apply list (into ['fn args] body))))
-    (str k)))
-
-(defmacro metadata-resolver
-  [nom]
-  (let [parsers @metadata-parsers
-        k (gensym) v (gensym)]
-    `(defn ~nom
-      [~k ~v]
-      ~(apply list
-        (into ['case k]
-          (concat
-            (reduce concat (for [[n f] parsers] [(str n) (list f k v)]))
-            [nil]))))))
-        
-(def-metadata-parser title
+(defn resolve-metadata
   [k v]
-  [[:title v]])
+  (case k
+    "title" [[:title v]]
+    "author" [[:author v]]
+    "language" [[:language v]]
+    "release date"
+      (let [[_ date id] (re-find #"^(.*) \[EBook #(\d+)" v)]
+        [
+          [:release-date (.parse date-format (.trim date))]
+          [:gutenberg-id (Integer/parseInt id)]])
+    nil))
 
-(def-metadata-parser author
-  [k v]
-  [[:author v]])
+(defn process-tag
+  [#^Element tag] 
+  (case (.toLowerCase (.tagName tag))
+    "p" {:paragraphs [(.trim (.text tag))]}
+    "div" {:paragraphs [(.trim (.text tag))]}
+    "h1" {:title (.trim (.text tag))}
+    "h2" {:title (.trim (.text tag))}
+    "h3" {:title (.trim (.text tag))}
+    "img" (if-let [alt (.attr tag "alt")] {:paragraphs [alt]} {})
+    {}))
 
-(def date-format (java.text.SimpleDateFormat. "M d, y"))
-
-(def-metadata-parser "release date"
-  [k v]
-  (let [[_ date id] (re-find #"^(.*) \[EBook #(\d+)" v)]
-    (println date)
-    [
-      [:release-date (.parse date-format (.trim date))]
-      [:gutenberg-id (Integer/parseInt id)]]))
-
-(def-metadata-parser language
-  [k v]
-  [[:language v]])
-
-(metadata-resolver resolve-metadata)
+(defn merge-tags
+  ([tag-list]
+    (reverse (filter identity (reduce merge-tags (list {}) tag-list))))
+  ([result-list cur]
+    (let [prev (first result-list)]
+      (case [(apply hash-set (keys prev)) (apply hash-set (keys cur))]
+        [#{:title :paragraphs} #{:title :paragraphs}] (cons cur result-list)
+        [#{:title} #{:paragraphs}] (conj (rest result-list) (merge prev cur))
+        [#{:paragraphs} #{:title}] (conj (rest result-list) (merge prev cur))
+        [#{:title :paragraphs} #{:title}] (conj (rest result-list)
+                                            (assoc prev :title
+                                              (str (:title prev) " " (:title cur))))
+        [#{:title} #{:title :paragraphs}] (conj (rest result-list)
+                                            (assoc cur :title
+                                              (str (:title prev) " " (:title cur))))
+        [#{:title} #{:title}] (conj (rest result-list)
+                                {:title (str (:title prev) " " (:title cur))})
+        [#{:title :paragraphs} #{:paragraphs}] (conj (rest result-list)
+                                                (assoc prev :paragraphs
+                                                  (into (:paragraphs prev)
+                                                        (:paragraphs cur))))
+        [#{:paragraphs} #{:title :paragraphs}] (conj (rest result-list)
+                                                (assoc cur :paragraphs
+                                                  (into (:paragraphs prev)
+                                                        (:paragraphs cur))))
+        [#{:paragraphs} #{:paragraphs}] (conj (rest result-list)
+                                                (assoc cur :paragraphs
+                                                  (into (:paragraphs prev)
+                                                        (:paragraphs cur))))
+        [#{} #{:title :paragraphs}] (conj (rest result-list) cur)
+        [#{} #{:paragraphs}] (conj (rest result-list) cur)
+        [#{} #{:title}] (conj (rest result-list) cur)
+        [#{:title :paragraphs} #{}] result-list
+        [#{:paragraphs} #{}] result-list
+        [#{:title} #{}] result-list
+        [#{} #{}] (rest result-list)))))
 
 (defn parse-metadata
   [metadata-block]
@@ -93,13 +108,7 @@
         copyright (select-one body copyright-selector)
         metadata (parse-metadata (.text copyright))
         content (mapcat traverse (after body copyright))]
-    (assoc metadata :content
-      (apply vector
-        (for [[heading & content] (split-into-sections content)]
-          {
-            :title (.text heading)
-            :paragraphs (apply vector (map #(.text %)
-                             (filter #(content-tags (.tagName %)) content)))})))))
+    (assoc metadata :content (merge-tags (map process-tag content)))))
 
 (defn to-tree
   [text]
@@ -117,7 +126,7 @@
   [dirname out-fname]
   (with-open [outf (io/output-stream (io/file out-fname))]
     (doseq [content (process-directory dirname)]
-      (println (:title content))
+      (println (str (:title content) "-" (:author content)))
       (json/write content outf)
       (.write outf "\n"))))
 
@@ -125,8 +134,10 @@
   [fname]
   (first (html-files fname)))
 
-(let [b (select-one (to-tree (one-file "/Volumes/Untitled 1/gutenberg")) "body")]
-  (parse-metadata (.text (select-one b copyright-selector))))
+'(let [b (select-one (to-tree (one-file "/Volumes/Untitled 1/gutenberg")) "body")]
+  (json/write-str (parse-metadata (.text (select-one b copyright-selector)))))
+
+(:content (first (process-directory "/Volumes/Untitled 1/gutenberg")))
 
 '(parse-to-file "/Volumes/Untitled 1/gutenberg"
                "/Volumes/Untitled 1/gutenberg/clean.jsons")

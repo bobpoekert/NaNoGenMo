@@ -1,6 +1,7 @@
 (ns NaNoGenMo.core
+  (require [clojure.data.json :as json])
   (import [MurmurHash3]
-          [java.io File]
+          [java.io File PrintWriter]
           [java.util.zip ZipFile]))
 
 (def murmur-seed (int (* 100000 (Math/random)))) 
@@ -98,6 +99,12 @@
     (java.text.SimpleDateFormat. fmt)
     date))
 
+(defn date-to-json
+  [#^java.util.Date date #^PrintWriter out]
+  (.print out (long (/ (.getTime date) 1000))))
+
+(extend java.util.Date json/JSONWriter {:-write date-to-json})
+
 (defmacro nil-errors
   [& exprs]
   `(try
@@ -109,8 +116,10 @@
   (map :body (filter (fn [f]
                       (and
                         (:body f)
-                        (.endsWith (:name f) ".html"))
-                     (read-zipfile-tree dirname)))))
+                        (or
+                          (.endsWith (:name f) ".html")
+                          (.endsWith (:name f) ".htm"))))
+                     (read-zipfile-tree dirname))))
 
 (defn -main
   "I don't do a whole lot."
