@@ -8,5 +8,6 @@
     [org.clojure/clojure "1.4.0"]
     [clojure-opennlp "0.3.1"]
     [org.jsoup/jsoup "1.4.1"]
+    [clj-time "0.6.0"]
     [org.clojure/data.json "0.2.3"]
     [factual/clj-leveldb "0.1.0"]])

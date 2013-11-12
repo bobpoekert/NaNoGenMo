@@ -75,7 +75,7 @@
 
 (defn read-zipfile
   [#^File file]
-    (let [zipfile (.ZipFile file)]
+    (let [zipfile (ZipFile. file)]
       (map
         (fn [entry]
           {
@@ -85,22 +85,32 @@
             :body (if (.isDirectory entry)
                     nil
                     (.getInputStream zipfile entry))})
-        (seq (.entries zipfile)))))
+        (enumeration-seq (.entries zipfile)))))
 
 (defn read-zipfile-tree
   [dirname]
   (mapcat read-zipfile (filter #(.endsWith (.getName %) ".zip")
                                (file-seq (File. dirname)))))
 
-(defmacro parse-date
+(defn parse-date
   [fmt date]
-  `(.parse
-    (java.text.SimpleDateFormat. ~fmt)
-    ~date))
+  (.parse
+    (java.text.SimpleDateFormat. fmt)
+    date))
+
+(defmacro nil-errors
+  [& exprs]
+  `(try
+    ~exprs
+    (catch Exception e# nil)))
 
 (defn html-files
   [dirname]
-  (map :body (filter :body (read-zipfile-tree dirname))))
+  (map :body (filter (fn [f]
+                      (and
+                        (:body f)
+                        (.endsWith (:name f) ".html"))
+                     (read-zipfile-tree dirname)))))
 
 (defn -main
   "I don't do a whole lot."

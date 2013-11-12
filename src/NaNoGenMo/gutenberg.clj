@@ -1,7 +1,8 @@
 (ns NaNoGenMo.gutenberg
   (use NaNoGenMo.core)
   (require [clojure.data.json :as json]
-           [clojure.java.io :as io])
+           [clojure.java.io :as io]
+           [clj-time.format :as t])
   (import [org.jsoup Jsoup]
           [org.jsoup.select Elements]
           [org.jsoup.nodes Element Document]))
@@ -24,14 +25,9 @@
   [#^Element root]
   (.getAllEments root))
 
-(def copyright-selector ":contains(***START OF THE PROJECT GUTENBERG EBOOK)")
+(def copyright-selector "pre")
 (def content-tags #{"p" "div"})
-(def metadata-re #"^(.*?):(.*)$")
-(def metadata-keys #{
-  "title"
-  "author"
-  "release date"
-  "language"})
+(def metadata-re #"[\r\n](.*?):(.*)[\r\n]")
 
 (def metadata-parsers (atom {}))
 
@@ -40,7 +36,7 @@
   (do
     (swap! metadata-parsers
       #(assoc % (str k)
-        (list 'fn (symbol k) args body)))
+        (apply list (into ['fn args] body))))
     (str k)))
 
 (defmacro metadata-resolver
@@ -49,10 +45,11 @@
         k (gensym) v (gensym)]
     `(defn ~nom
       [~k ~v]
-      ~(apply list (concat
-        ['case k]
-        (for [[n f] parsers] [n (list f k v)])
-        nil)))))
+      ~(apply list
+        (into ['case k]
+          (concat
+            (reduce concat (for [[n f] parsers] [(str n) (list f k v)]))
+            [nil]))))))
         
 (def-metadata-parser title
   [k v]
@@ -62,11 +59,15 @@
   [k v]
   [[:author v]])
 
+(def date-format (java.text.SimpleDateFormat. "M d, y"))
+
 (def-metadata-parser "release date"
   [k v]
-  [
-    [:release-date (parse-date "M d, y" (first (.split v "[")))]
-    [:gutenberg-id (int (.group (re-find #"\#(\d+)\]" v) 1))]])
+  (let [[_ date id] (re-find #"^(.*) \[EBook #(\d+)" v)]
+    (println date)
+    [
+      [:release-date (.parse date-format (.trim date))]
+      [:gutenberg-id (Integer/parseInt id)]]))
 
 (def-metadata-parser language
   [k v]
@@ -77,10 +78,10 @@
 (defn parse-metadata
   [metadata-block]
   (into {}
-    (filter identity
-      (mapcat resolve-metadata
-        (for [match (re-seq metadata-re metadata-block)]
-          [(.toLowerCase (.trim (.group match 0))) (.trim (.group match 1))])))))
+    (apply concat
+      (filter identity
+        (for [[_ k v] (re-seq metadata-re metadata-block)]
+          (resolve-metadata (.toLowerCase (.trim k)) (.trim v)))))))
 
 (defn select-one
   [#^Element e selector]
@@ -100,20 +101,32 @@
             :paragraphs (apply vector (map #(.text %)
                              (filter #(content-tags (.tagName %)) content)))})))))
 
+(defn to-tree
+  [text]
+  (Jsoup/parse text "UTF-8" "http://www.gutenberg.org"))
+
 (defn parse-content
   [text]
-  (extract-content (Jsoup/parse text)))
+  (extract-content (to-tree text)))
 
 (defn process-directory
   [dirname]
-  (pmap parse-content (html-files dirname)))
+  (map parse-content (html-files dirname)))
 
 (defn parse-to-file
   [dirname out-fname]
   (with-open [outf (io/output-stream (io/file out-fname))]
     (doseq [content (process-directory dirname)]
+      (println (:title content))
       (json/write content outf)
       (.write outf "\n"))))
 
-(parse-to-file "/Volumes/Untitled 1/gutenberg"
+(defn one-file
+  [fname]
+  (first (html-files fname)))
+
+(let [b (select-one (to-tree (one-file "/Volumes/Untitled 1/gutenberg")) "body")]
+  (parse-metadata (.text (select-one b copyright-selector))))
+
+'(parse-to-file "/Volumes/Untitled 1/gutenberg"
                "/Volumes/Untitled 1/gutenberg/clean.jsons")
