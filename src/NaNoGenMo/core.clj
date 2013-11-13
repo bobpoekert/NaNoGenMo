@@ -75,7 +75,7 @@
   (distinct-with #(simhash % restrictiveness) token-groups))
 
 (defmacro seq-with-open
-  "Like with-open, but for expressions that return lazy seq's.
+  "Like with-open, but for expressions that return lazy seqs.
   Closes the file when the seq has been completely consumed."
   [[fname fexp] body]
   `(let [~fname ~fexp
@@ -85,27 +85,32 @@
                   (do
                     (.close ~fname)
                     nil)
-                  (cons (first cur#) (f# (rest cur#))))))]
+                  (try
+                    (cons (first cur#) (f# (rest cur#)))
+                    (catch Exception e#
+                      (do
+                        (.close ~fname)
+                        (throw e#)))))))]
       (f# ~body)))
 
 (defn read-zipfile
   [#^File file]
-    (seq-with-open [zipfile (ZipFile. file)]
-      (map
-        (fn [entry]
-          {
-            :directory (.isDirectory entry)
-            :name (.getName entry)
-            :size (.getSize entry)
-            :body (if (.isDirectory entry)
-                    nil
-                    (slurp (.getInputStream zipfile entry)))})
-        (enumeration-seq (.entries zipfile)))))
+  (seq-with-open [zipfile (ZipFile. file)]
+    (map
+      (fn [entry]
+        {
+          :directory (.isDirectory entry)
+          :name (.getName entry)
+          :size (.getSize entry)
+          :body (if (.isDirectory entry)
+                  nil
+                  #(with-open [f (.getInputStream zipfile entry)] (slurp f)))})
+      (enumeration-seq (.entries zipfile)))))
 
 (defn read-zipfile-tree
   [dirname]
-    (mapcat read-zipfile (filter #(.endsWith (.getName %) ".zip")
-                                 (file-seq (File. dirname)))))
+  (mapcat read-zipfile (filter #(.endsWith (.getName %) ".zip")
+                               (file-seq (File. dirname)))))
 (defn date-to-json
   [#^java.util.Date date #^PrintWriter out]
   (.print out (long (/ (.getTime date) 1000))))
@@ -120,7 +125,7 @@
 
 (defn html-files
   [dirname]
-  (map :body (filter (fn [f]
+  (map #((:body %)) (filter (fn [f]
                       (and
                         (:body f)
                         (or

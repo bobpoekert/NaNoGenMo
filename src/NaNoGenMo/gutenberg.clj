@@ -43,17 +43,24 @@
           [:gutenberg-id (Integer/parseInt id)]])
     nil))
 
+(defn clean-whitespace
+  [#^String s]
+  (.replace (.trim s) "\\s+" " "))
+
 (defn process-tag
   [#^Element tag] 
   (case (.toLowerCase (.tagName tag))
-    "p" {:paragraphs [(.trim (.text tag))]}
-    "div" {:paragraphs [(.trim (.text tag))]}
-    "h1" {:title (.trim (.text tag))}
-    "h2" {:title (.trim (.text tag))}
-    "h3" {:title (.trim (.text tag))}
+    "p" {:paragraphs [(clean-whitespace (.text tag))]}
+    "div" {:paragraphs [(clean-whitespace (.text tag))]}
+    "h1" {:title (clean-whitespace (.text tag))}
+    "h2" {:title (clean-whitespace (.text tag))}
+    "h3" {:title (clean-whitespace (.text tag))}
     "img" (if-let [alt (.attr tag "alt")] {:paragraphs [alt]} {})
-    "br" {:title ""}
     {}))
+
+(defn join-titles
+  [a b]
+  (clean-whitespace (str (:title a) " " (:title b))))
 
 (defn merge-tags
   ([tag-list]
@@ -61,36 +68,38 @@
   ([result-list cur]
     (let [prev (first result-list)]
       (case [(apply hash-set (keys prev)) (apply hash-set (keys cur))]
-        [#{:title :paragraphs} #{:title :paragraphs}] (conj result-list cur)
-        [#{:title} #{:paragraphs}] (conj (rest result-list) (merge prev cur))
-        [#{:paragraphs} #{:title}] (conj (rest result-list) (merge prev cur))
-        [#{:title :paragraphs} #{:title}] (conj (rest result-list)
-                                            (assoc prev :title
-                                              (str (:title prev) " " (:title cur))))
-        [#{:title} #{:title :paragraphs}] (conj (rest result-list)
-                                            (assoc cur :title
-                                              (str (:title prev) " " (:title cur))))
-        [#{:title} #{:title}] (conj (rest result-list)
-                                {:title (str (:title prev) " " (:title cur))})
-        [#{:title :paragraphs} #{:paragraphs}] (conj (rest result-list)
+        [#{:title :paragraphs} #{:title :paragraphs}] (cons cur result-list)
+        [#{:title} #{:paragraphs}] (cons (merge prev cur) (rest result-list))
+        [#{:paragraphs} #{:title}] (cons (merge prev cur)  (rest result-list))
+        [#{:title :paragraphs} #{:title}] (cons cur result-list)
+        [#{:title} #{:title :paragraphs}] (cons 
+                                            (assoc cur :title (join-titles prev cur))
+                                            (rest result-list))
+        [#{:title} #{:title}] (cons 
+                                {:title (join-titles prev cur)}
+                                (rest result-list))
+        [#{:title :paragraphs} #{:paragraphs}] (cons 
                                                 (assoc prev :paragraphs
                                                   (into (:paragraphs prev)
-                                                        (:paragraphs cur))))
-        [#{:paragraphs} #{:title :paragraphs}] (conj (rest result-list)
+                                                        (:paragraphs cur)))
+                                                (rest result-list))
+        [#{:paragraphs} #{:title :paragraphs}] (cons
                                                 (assoc cur :paragraphs
                                                   (into (:paragraphs prev)
-                                                        (:paragraphs cur))))
-        [#{:paragraphs} #{:paragraphs}] (conj (rest result-list)
-                                                (assoc cur :paragraphs
-                                                  (into (:paragraphs prev)
-                                                        (:paragraphs cur))))
-        [#{} #{:title :paragraphs}] (conj (rest result-list) cur)
-        [#{} #{:paragraphs}] (conj (rest result-list) cur)
-        [#{} #{:title}] (conj (rest result-list) cur)
+                                                        (:paragraphs cur)))
+                                                (rest result-list))
+        [#{:paragraphs} #{:paragraphs}] (cons 
+                                          (assoc cur :paragraphs
+                                            (into (:paragraphs prev)
+                                                  (:paragraphs cur)))
+                                          (rest result-list))
+        [#{} #{:title :paragraphs}] (cons cur (rest result-list))
+        [#{} #{:paragraphs}] (cons cur (rest result-list))
+        [#{} #{:title}] (cons cur (rest result-list))
         [#{:title :paragraphs} #{}] result-list
         [#{:paragraphs} #{}] result-list
         [#{:title} #{}] result-list
-        [#{} #{}] (rest result-list)))))
+        [#{} #{}] result-list))))
 
 (defn parse-metadata
   [metadata-block]
