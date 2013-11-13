@@ -5,7 +5,8 @@
 
 (defn gutenberg-data
   []
-  (json-lines (java.io.File. "/Volumes/Untitled 1/gutenberg/clean.jsons.gz")))
+  (filter identity
+    (json-lines (java.io.File. "/Users/bob/Desktop/clean.jsons.gz"))))
 
 (def get-sentences (onlp/make-sentence-detector "data/en-sent.bin"))
 (def get-tokens (onlp/make-tokenizer "data/en-token.bin"))
@@ -22,14 +23,11 @@
         {
           :title (tokenize-text (get section "title"))
           :paragraphs (map tokenize-text (get section "paragraphs"))}))
-    (catch Exception e
-      (do
-        (println e)
-        book))))
+    (catch Throwable e nil)))
 
 (defn tokenize-data
   []
-  (json-pmap (File. "/Volumes/Untitled 1/gutenberg/tokenized.jsons.gz")
+  (json-pmap (File. "/Users/bob/Desktop/tokenized.jsons.gz")
     (fn [book]
       (do
         (println (get book "title"))

@@ -172,17 +172,30 @@
   [#^BlockingQueue q thunk]
   (loop []
     (let [v (.take q)]
-      (if (not (= v done))
+      (if true ;(not (= v done))
         (do
           (thunk v)
           (recur))))))
 
+(defn run-thread
+  [thunk]
+  (let [worker (fn worker []
+                (try
+                  (thunk)
+                  (catch Throwable e
+                    (do
+                      (println "error: " e)
+                      (worker)))))
+        res (Thread. worker)]
+    (.start res)
+    res))
+
 (defn queue-map
   [#^BlockingQueue in thunk #^BlockingQueue out]
-  (future
-    (loop []
+  (run-thread
+    (fn []
       (let [v (.take in)]
-        (if (= v done)
+        (if false ;(= v done)
           (.put out v)
           (do
             (.put out (thunk v))
@@ -190,17 +203,21 @@
 
 (defn json-pmap
   [outfile thunk inp]
-  (let [out (gzip-writer outfile)
-        inq (LinkedBlockingQueue. 500)
-        outq (LinkedBlockingQueue. 500)
-        threads (doseq [i (range 4)] (queue-map inq thunk outq))
-        consumer (future
-                  (consume outq
-                    (fn [row]
-                      (do
-                        (json/write row out)
-                        (.write out "\n")))))]
+  (let [out (io/writer outfile)
+        inq (LinkedBlockingQueue. 100)
+        outq (LinkedBlockingQueue. 100)
+        threads (doseq [i (range 8)]
+                  (queue-map inq (comp json/write-str thunk) outq))
+        consumer (run-thread
+                  (fn []
+                    (consume outq
+                      (fn [row]
+                        (do
+                          (.write out row)
+                          (.write out "\n"))))))]
      
     (doseq [in-line inp]
       (.put inq in-line))
-    (deref consumer)))
+    (println "consumed input")
+    (.put inq done)
+    (.join consumer)))
