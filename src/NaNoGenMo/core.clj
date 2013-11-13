@@ -1,8 +1,10 @@
 (ns NaNoGenMo.core
-  (require [clojure.data.json :as json])
+  (require [clojure.data.json :as json]
+           [clojure.java.io :as io])
   (import [MurmurHash3]
-          [java.io File PrintWriter]
-          [java.util.zip ZipFile]))
+          [java.io File PrintWriter BufferedReader]
+          [java.util.concurrent LinkedBlockingQueue BlockingQueue TimeUnit]
+          [java.util.zip ZipFile GZIPInputStream GZIPOutputStream]))
 
 (def murmur-seed (int (* 100000 (Math/random)))) 
 
@@ -74,6 +76,12 @@
   [token-groups restrictiveness]
   (distinct-with #(simhash % restrictiveness) token-groups))
 
+(defmacro nil-errors
+  [& exprs]
+  `(try
+    ~@exprs
+    (catch Exception e# nil)))
+
 (defmacro seq-with-open
   "Like with-open, but for expressions that return lazy seqs.
   Closes the file when the seq has been completely consumed."
@@ -122,11 +130,6 @@
 
 (extend java.util.Date json/JSONWriter {:-write date-to-json})
 
-(defmacro nil-errors
-  [& exprs]
-  `(try
-    ~exprs
-    (catch Exception e# nil)))
 
 (defn html-files
   [dirname]
@@ -137,3 +140,67 @@
                           (.endsWith (:name f) ".html")
                           (.endsWith (:name f) ".htm"))))
                      (read-zipfile-tree dirname))))
+
+
+(defn json-lines
+  "Takes a gzipped file of newline-delimited json, returns a seq of parsed lines"
+  [#^File f]
+  (let [res (fn res [#^BufferedReader r]
+              (lazy-seq
+                (let [line (.readLine r)]
+                  (if line
+                    (cons (json/read-str line) (res r))
+                    (do
+                      (.close r)
+                      nil)))))]
+    (res (io/reader (GZIPInputStream. (io/input-stream f))))))
+
+(defn gzip-writer
+  [f]
+  (io/writer (GZIPOutputStream. (io/output-stream f))))
+
+(defn write-json-gz-lines
+  [outfile inp]
+  (with-open [out (gzip-writer outfile)]
+    (doseq [row inp]
+      (json/write row out)
+      (.write out "\n"))))
+
+(def done 'done)
+
+(defn consume
+  [#^BlockingQueue q thunk]
+  (loop []
+    (let [v (.take q)]
+      (if (not (= v done))
+        (do
+          (thunk v)
+          (recur))))))
+
+(defn queue-map
+  [#^BlockingQueue in thunk #^BlockingQueue out]
+  (future
+    (loop []
+      (let [v (.take in)]
+        (if (= v done)
+          (.put out v)
+          (do
+            (.put out (thunk v))
+            (recur)))))))
+
+(defn json-pmap
+  [outfile thunk inp]
+  (let [out (gzip-writer outfile)
+        inq (LinkedBlockingQueue. 500)
+        outq (LinkedBlockingQueue. 500)
+        threads (doseq [i (range 4)] (queue-map inq thunk outq))
+        consumer (future
+                  (consume outq
+                    (fn [row]
+                      (do
+                        (json/write row out)
+                        (.write out "\n")))))]
+     
+    (doseq [in-line inp]
+      (.put inq in-line))
+    (deref consumer)))
