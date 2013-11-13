@@ -2,6 +2,8 @@
   :description "FIXME: write description"
   :url "http://example.com/FIXME"
   :java-source-paths ["src/java"]
+  :main NaNoGenMo.gutenberg
+  :jvm-opts ["-Xmx1500m" "-server"]
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [

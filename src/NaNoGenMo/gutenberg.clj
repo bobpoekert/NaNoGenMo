@@ -1,6 +1,7 @@
 (ns NaNoGenMo.gutenberg
   (use NaNoGenMo.core)
   (require [clojure.data.json :as json]
+           ;[clojure.core.reducers :as r]
            [clojure.java.io :as io]
            [clj-time.format :as t])
   (import [org.jsoup Jsoup]
@@ -32,16 +33,18 @@
 
 (defn resolve-metadata
   [k v]
-  (case k
-    "title" [[:title v]]
-    "author" [[:author v]]
-    "language" [[:language v]]
-    "release date"
-      (let [[_ date id] (re-find #"^(.*) \[EBook #(\d+)" v)]
-        [
-          [:release-date (.parse date-format (.trim date))]
-          [:gutenberg-id (Integer/parseInt id)]])
-    nil))
+  (try
+    (case k
+      "title" [[:title v]]
+      "author" [[:author v]]
+      "language" [[:language v]]
+      "release date"
+        (let [[_ date id] (re-find #"^(.*) \[EBook #(\d+)" v)]
+          [
+            [:release-date (.parse date-format (.trim date))]
+            [:gutenberg-id (Integer/parseInt id)]])
+      nil)
+    (catch Exception e nil)))
 
 (defn clean-whitespace
   [#^String s]
@@ -123,23 +126,33 @@
 
 (defn to-tree
   [text]
-  (Jsoup/parse text))
+  (Jsoup/parse text "UTF-8" "http://www.gutenberg.org"))
 
 (defn parse-content
-  [text]
-  (extract-content (to-tree text)))
+  [#^java.io.InputStream text]
+  (try
+    (timeout 5000
+      (extract-content (to-tree text)))
+    (catch Exception e
+      (do
+        (println e)
+        nil))
+    (finally
+      (.close text))))
 
 (defn process-directory
   [dirname]
-  (map parse-content (html-files dirname)))
+  (pmap parse-content (html-files dirname)))
 
 (defn parse-to-file
   [dirname out-fname]
-  (with-open [outf (io/output-stream (io/file out-fname))]
+  (with-open [outf (io/writer (io/file out-fname))]
     (doseq [content (process-directory dirname)]
-      (println (str (:title content) "-" (:author content)))
-      (json/write content outf)
-      (.write outf "\n"))))
+      (if content
+        (do
+          (println (str (:title content) " - " (:author content)))
+          (json/write content outf)
+          (.write outf "\n"))))))
 
 (defn one-file
   [fname]
@@ -148,7 +161,13 @@
 '(let [b (select-one (to-tree (one-file "/Volumes/Untitled 1/gutenberg")) "body")]
   (json/write-str (parse-metadata (.text (select-one b copyright-selector)))))
 
-(:content (first (process-directory "/Volumes/Untitled 1/gutenberg")))
+'(:content (first (process-directory "/Volumes/Untitled 1/gutenberg")))
 
-'(parse-to-file "/Volumes/Untitled 1/gutenberg"
-               "/Volumes/Untitled 1/gutenberg/clean.jsons")
+(defn run
+  []
+  (parse-to-file "/Volumes/Untitled 1/gutenberg"
+                 "/Volumes/Untitled 1/gutenberg/clean.jsons"))
+
+(defn -main
+  [& args]
+  (run))

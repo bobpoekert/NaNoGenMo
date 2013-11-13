@@ -95,17 +95,22 @@
 
 (defn read-zipfile
   [#^File file]
-  (seq-with-open [zipfile (ZipFile. file)]
-    (map
-      (fn [entry]
-        {
-          :directory (.isDirectory entry)
-          :name (.getName entry)
-          :size (.getSize entry)
-          :body (if (.isDirectory entry)
-                  nil
-                  #(with-open [f (.getInputStream zipfile entry)] (slurp f)))})
-      (enumeration-seq (.entries zipfile)))))
+  (nil-errors
+    (let [zipfile (ZipFile. file)]
+      (map
+        (fn [entry]
+          {
+            :directory (.isDirectory entry)
+            :name (.getName entry)
+            :size (.getSize entry)
+            :body (if (.isDirectory entry)
+                    nil
+                    (.getInputStream zipfile entry))})
+        (enumeration-seq (.entries zipfile))))))
+
+(defmacro timeout [ms & body]
+  `(let [f# (future ~@body)]
+     (.get f# ~ms java.util.concurrent.TimeUnit/MILLISECONDS)))
 
 (defn read-zipfile-tree
   [dirname]
@@ -125,15 +130,10 @@
 
 (defn html-files
   [dirname]
-  (map #((:body %)) (filter (fn [f]
+  (map :body (filter (fn [f]
                       (and
                         (:body f)
                         (or
                           (.endsWith (:name f) ".html")
                           (.endsWith (:name f) ".htm"))))
                      (read-zipfile-tree dirname))))
-
-(defn -main
-  "I don't do a whole lot."
-  [& args]
-  (println "Hello, World!"))
