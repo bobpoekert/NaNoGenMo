@@ -172,7 +172,7 @@
   [#^BlockingQueue q thunk]
   (loop []
     (let [v (.take q)]
-      (if true ;(not (= v done))
+      (if (not (= v done))
         (do
           (thunk v)
           (recur))))))
@@ -195,11 +195,29 @@
   (run-thread
     (fn []
       (let [v (.take in)]
-        (if false ;(= v done)
-          (.put out v)
+        (if (= v done)
+          (do
+            (.put out v)
+            (.put in v))
           (do
             (.put out (thunk v))
             (recur)))))))
+
+(defn unordered-pmap
+  ([thunk inp queue-size n-threads]
+    (let [inq (LinkedBlockingQueue. queue-size)
+          outq (LinkedBlockingQueue. queue-size)
+          threads (doseq [i (range n-threads)]
+                    (queue-map inq thunk outq))
+          res (fn res []
+                (lazy-seq
+                  (let [v (.take outq)]
+                    (if (= v done)
+                      nil
+                      (cons v (res))))))]
+      (res)))
+  ([thunk inp]
+    (unordered-pmap thunk inp 100 8)))
 
 (defn json-pmap
   [outfile thunk inp]
