@@ -2,7 +2,7 @@
   :description "FIXME: write description"
   :url "http://example.com/FIXME"
   :java-source-paths ["src/java"]
-  :main NaNoGenMo.nlp
+  :main NaNoGenMo.markov
   :jvm-opts ["-Xmx1500m" "-server"]
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
@@ -11,4 +11,5 @@
     [clojure-opennlp "0.3.1"]
     [org.jsoup/jsoup "1.4.1"]
     [factual/clj-leveldb "0.1.0"]
+    [byte-streams "0.1.6"] 
     [org.clojure/data.json "0.2.3"]])
