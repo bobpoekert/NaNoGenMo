@@ -54,7 +54,6 @@
       :val-encoder long-to-bytes
       :val-decoder bytes-to-long}))
 
-
 (defn update-counts
   ([db batch-size inp]
     (let [counter (atom 0)]
@@ -65,25 +64,21 @@
           (if (zero? (mod @counter 100))
             (println @counter))))))
   ([db inp]
-    (update-counts db 100 inp)))
-
-(defn bigrams
-  ([beginning tokens]
-    (lazy-seq
-      (cond
-        (empty? tokens) nil
-        beginning (cons [:start (first tokens)] (bigrams false (rest tokens)))
-        (empty? (rest tokens)) [(first tokens) :end]
-        :else (cons
-                [(first tokens) (second tokens)]
-                (bigrams false (rest tokens))))))
-  ([tokens]
-    (bigrams true tokens)))
+    (update-counts db 1000 inp)))
 
 (defn pairs
   [s]
   (filter #(= (count %) 2)
-    (partition 2 s)))
+    (partition 2 1 s)))
+
+(defn bigrams
+  [tokens]
+  (filter #(= (count %) 2)
+    (partition 2
+      (concat
+        [:start]
+        tokens
+        [:end]))))
 
 (defn paragraphs
   [fname]
@@ -111,6 +106,31 @@
   [s]
   (doseq [e s]
     (println e)))
+
+(defn get-transition-counts
+  [db bigram]
+  (take-while
+    (fn [[[left right] v]]
+      (= left bigram))
+    (level/iterator db bigram)))
+
+'(let [db (create-db "bigrams.level")]
+  (get-transition-counts db [:start "The"]))
+
+(defn get-transition-probs
+  [db bigram]
+  (let [counts (get-transition-counts db bigram)
+        total (reduce + (map second counts))]
+    (for [[[l r] c] counts]
+      [r (/ total c)])))
+
+(defn chain
+  [db start-key]
+  (lazy-seq
+    (let [res (second (first (apply max-key second (get-transition-counts db start-key))))]
+      (cons
+        res
+        (chain db res)))))
 
 (defn -main
   [& args]
