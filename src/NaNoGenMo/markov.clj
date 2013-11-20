@@ -8,7 +8,8 @@
   (case v
     :start "\1"
     :end "\2"
-    (.replace v "\0" "")))
+    (let [^String s v]
+      (.replace s "\0" ""))))
 
 (defn unbin
   [v]
@@ -19,12 +20,11 @@
 
 (defn encode-key
   [k]
-  (.getBytes
-    (apply str (flatten (interpose "\0" (map binify (flatten k)))))
-    "UTF-8"))
+  (let [^String res (apply str (flatten (interpose "\0" (map binify (flatten k)))))]
+    (.getBytes res "UTF-8")))
 
 (defn decode-key
-  [s]
+  [^bytes s]
   (partition 2 (map unbin (.split (String. s "UTF-8") "\0"))))
 
 (defn long-to-bytes
@@ -82,8 +82,12 @@
 
 (defn paragraphs
   [fname]
-  (mapcat #(get % "paragraphs") 
-    (get (first (json-lines fname)) "content")))
+  (mapcat
+    (fn [book]
+      (let [content (get book "content")]
+        (println (get book "title"))
+        (mapcat #(get % "paragraphs") content)))
+    (json-lines fname)))
 
 (defn ngram-pairs
   [paragraphs]
@@ -124,13 +128,21 @@
     (for [[[l r] c] counts]
       [r (/ total c)])))
 
+(defn pick-bigram
+  [bigrams]
+  (let [ceil (apply max (map second bigrams))]
+    (apply max-key
+      (fn [[k c]]
+        (/ (+ c (* (Math/random) ceil)) 2))
+      bigrams)))
+
 (defn chain
   [db start-key]
   (lazy-seq
     (let [counts (get-transition-counts db start-key)]
       (if (empty? counts)
         nil
-        (let [res (second (first (apply max-key second counts)))]
+        (let [res (second (first (pick-bigram counts)))]
           (cons
             res
             (chain db res)))))))
@@ -144,7 +156,32 @@
         (not (= r :end)))
       (chain db start-key))))
 
-'(cons [:start "The"] (take-while (fn [[l r]] (not (= r :end))) (chain (create-db "bigrams.level") [:start "The"])))
+(defn random-start
+  [db]
+  (let [v (apply vector
+            (take-while
+              (fn [[[[l lr] r] v]]
+                (= l :start))
+              (level/iterator db [[:start]])))]
+    (first (first (rand-nth v)))))
+
+(def punct #{"." "," ";" ":" "?" "!"})
+
+(defn join-bigrams
+  [bigrams]
+  (let [b (StringBuilder.)]
+    (doseq [[l r] bigrams]
+      (when (string? l)
+        (if-not (contains? punct l) (.append b " "))
+        (.append b l))
+      (when (string? r)
+        (if-not (contains? punct r) (.append b " "))
+        (.append b r)))
+    (.trim (.toString b))))
+
+(defn random-chain
+  [db]
+  (join-bigrams (single-chain db (random-start db))))
 
 (defn -main
   [& args]

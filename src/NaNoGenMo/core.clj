@@ -141,14 +141,13 @@
                           (.endsWith (:name f) ".htm"))))
                      (read-zipfile-tree dirname))))
 
-
 (defn json-lines
   "Takes a gzipped file of newline-delimited json, returns a seq of parsed lines"
   [#^File f]
   (let [res (fn res [#^BufferedReader r]
               (lazy-seq
                 (let [line (.readLine r)]
-                  (if line
+                  (if-not (nil? line)
                     (cons (json/read-str line) (res r))
                     (do
                       (.close r)

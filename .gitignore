@@ -10,3 +10,4 @@ pom.xml
 .lein-plugins
 *.jsons.gz
 *.level
+.DS_Store
