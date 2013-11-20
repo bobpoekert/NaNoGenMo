@@ -127,10 +127,24 @@
 (defn chain
   [db start-key]
   (lazy-seq
-    (let [res (second (first (apply max-key second (get-transition-counts db start-key))))]
-      (cons
-        res
-        (chain db res)))))
+    (let [counts (get-transition-counts db start-key)]
+      (if (empty? counts)
+        nil
+        (let [res (second (first (apply max-key second counts)))]
+          (cons
+            res
+            (chain db res)))))))
+
+(defn single-chain
+  [db start-key]
+  (cons
+    start-key
+    (take-while
+      (fn [[l r]]
+        (not (= r :end)))
+      (chain db start-key))))
+
+'(cons [:start "The"] (take-while (fn [[l r]] (not (= r :end))) (chain (create-db "bigrams.level") [:start "The"])))
 
 (defn -main
   [& args]
