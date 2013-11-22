@@ -56,20 +56,22 @@
 
 (defn update-counts
   ([db batch-size inp]
-    (let [counter (atom 0)]
-      (doseq [[k v] (mapcat (comp seq frequencies) (partition batch-size inp))]
-        (let [prev (or (level/get db k) 0)]
-          (level/put db k (+ prev v))
-          (swap! counter inc)
-          (if (zero? (mod @counter 100))
-            (println @counter))))))
+    (doseq [[k v] (mapcat (comp seq frequencies) (partition batch-size inp))]
+      (let [prev (or (level/get db k) 0)]
+        (level/put db k (+ prev v)))))
   ([db inp]
-    (update-counts db 1000 inp)))
+    (update-counts db 100000 inp)))
 
 (defn pairs
-  [s]
-  (filter #(= (count %) 2)
-    (partition 2 1 s)))
+  ([prev s]
+    (lazy-seq
+      (if (empty? s)
+        nil
+        (let [nxt (first s)]
+          (cons [prev nxt]
+            (pairs nxt (rest s)))))))
+  ([s]
+    (pairs (first s) (rest s))))
 
 (defn bigrams
   [tokens]
@@ -106,46 +108,137 @@
     (create-db outfname)
     (count-keys infname)))
 
-(defn printall
-  [s]
-  (doseq [e s]
-    (println e)))
-
 (defn get-transition-counts
   [db bigram]
-  (take-while
-    (fn [[[left right] v]]
-      (= left bigram))
-    (level/iterator db bigram)))
-
-'(let [db (create-db "bigrams.level")]
-  (get-transition-counts db [:start "The"]))
+  (let [iter (level/iterator db bigram)]
+    {
+      :total (second (first iter))
+      :counts 
+        (take-while
+          (fn [[[left right] v]]
+            (= left bigram))
+          (rest iter))}))
 
 (defn get-transition-probs
   [db bigram]
-  (let [counts (get-transition-counts db bigram)
-        total (reduce + (map second counts))]
-    (for [[[l r] c] counts]
+  (let [results (get-transition-counts db bigram)
+        total (:total results)]
+    (for [[[l r] c] (:counts results)]
       [r (/ total c)])))
 
 (defn pick-bigram
-  [bigrams]
-  (let [ceil (apply max (map second bigrams))]
+  [bigrams target-set]
+  (let [ceil (:total bigrams)
+        tokens (:counts bigrams)]
     (apply max-key
       (fn [[k c]]
-        (/ (+ c (* (Math/random) ceil)) 2))
-      bigrams)))
+        (let [score (/ (+ c (* (Math/random) ceil)) 2)]
+          (if (some (partial contains? target-set) k)
+            (+ score ceil)
+            score)))
+      tokens)))
+
+(def punct #{"." "," ";" ":" "?" "!"})
+
+(defn punct?
+  [token]
+  (or
+    (contains? punct token)
+    (re-find #"^['\"«»‘’‚‛“”„‹›]" token)))
+
+(defn re-quote
+  [s]
+  (java.util.regex.Pattern/quote s))
+
+(defmacro quattern
+  [s]
+  (re-pattern (re-quote s)))
+
+(def bracket-pairs
+  {
+    "“" #"”"
+    "\"" #"\""
+    "'" #"'"
+    "«" #"»"
+    "‘" #"’"
+    "[" (quattern "]")
+    "(" (quattern ")")})
+
+(def open-bracket-re
+  (re-pattern (str "([" (apply str
+                          (map
+                            re-quote
+                            (keys bracket-pairs)))
+                    "])")))
+
+
+(defprotocol PatternTest
+  (test-pattern [pattern target]))
+
+(extend-type String
+  PatternTest
+  (test-pattern [pattern target]
+    (not (= (.indexOf pattern target) -1))))
+
+(extend-type java.util.regex.Pattern
+  PatternTest
+  (test-pattern [pattern target]
+    (boolean (re-find pattern target))))
+
+(defn check-target-set
+  [target-set token]
+  (let [res (some #(test-pattern % token) target-set)]
+    (if res
+      [true (disj target-set res)]
+      [false target-set])))
+
+(defn closing-pair
+  [token]
+  (let [matches (re-matches open-bracket-re)]
+    (if matches
+      (get bracket-pairs (first matches))
+      nil)))
+
+(defn pick-bigram
+  [counts target-set]
+  (let [ceil (:total counts)
+        bigrams (:counts counts)]
+    (loop [bigrams bigrams
+           target-set target-set
+           score 0
+           res nil]
+      (if (empty? bigrams)
+        [res target-set]
+        (let [[k c] (first bigrams)
+              [in-set target-set] (check-target-set target-set k)
+              new-score (+
+                          (/ (+ c (* (Math/random) ceil)))
+                          (if (contains? k :end) (* ceil 5) 0)
+                          (if in-set ceil 0))]
+          (if (or (nil? res) (> new-score score))
+            (recur
+              (rest bigrams)
+              target-set
+              new-score
+              k)
+            (recur
+              (rest bigrams)
+              target-set
+              score
+              res)))))))
 
 (defn chain
-  [db start-key]
-  (lazy-seq
-    (let [counts (get-transition-counts db start-key)]
-      (if (empty? counts)
-        nil
-        (let [res (second (first (pick-bigram counts)))]
-          (cons
-            res
-            (chain db res)))))))
+  ([db start-key target-set]
+    (lazy-seq
+      (let [counts (get-transition-counts db start-key)]
+        (if (empty? counts)
+          nil
+          (let [[[old res] target-set] (pick-bigram counts target-set)]
+            (cons
+              res
+              (chain db res target-set)))))))
+  ([db start-key]
+    (chain db start-key #{})))
 
 (defn single-chain
   [db start-key]
@@ -156,16 +249,22 @@
         (not (= r :end)))
       (chain db start-key))))
 
-(defn random-start
+(defn add-total-counts
   [db]
-  (let [v (apply vector
-            (take-while
-              (fn [[[[l lr] r] v]]
-                (= l :start))
-              (level/iterator db [[:start]])))]
-    (first (first (rand-nth v)))))
-
-(def punct #{"." "," ";" ":" "?" "!"})
+  (loop [iter (level/iterator db)
+         cur nil
+         cnt 0]
+    (if (not (empty? iter))
+      (let [[pair c] (first iter)]
+        (if (= (count pair) 2)
+          (let [[l r] pair]
+            (if (= l cur)
+              (recur (rest iter) cur (+ cnt c))
+              (do
+                (if (not (nil? cur))
+                  (level/put db cur cnt))
+                (recur (rest iter) l 1))))
+          (recur (rest iter) cur cnt))))))
 
 (defn join-bigrams
   [bigrams]
@@ -181,9 +280,11 @@
 
 (defn random-chain
   [db]
-  (join-bigrams (single-chain db (random-start db))))
+  (with-open [db (level/snapshot db)]
+    (join-bigrams (take 20 (single-chain db [:start "The"])))))
 
 (defn -main
   [& args]
   ;(printall (count-keys "tokenized.jsons.gz")))
-  (read-data "tokenized.jsons.gz" "bigrams.level"))
+  ;(read-data "tokenized.jsons.gz" "bigrams.level"))
+  (add-total-counts (create-db "bigrams.level")))
