@@ -1,7 +1,9 @@
 (ns NaNoGenMo.markov
   (use NaNoGenMo.core)
-  (import [java.nio ByteBuffer])
-  (require [clj-leveldb :as level]))
+  (import [java.nio ByteBuffer]
+          [opennlp.tools.tokenize DictionaryDetokenizer DetokenizationDictionary])
+  (require [clj-leveldb :as level]
+           [clojure.java.io :as io]))
 
 (defn binify
   [v]
@@ -117,7 +119,40 @@
         (take-while
           (fn [[[left right] v]]
             (= left bigram))
-          (rest iter))}))
+          (take 1000 (rest iter)))}))
+
+(defn key-heap
+  ^java.util.PriorityQueue
+  [k]
+  (java.util.PriorityQueue. k
+    (fn [[[ak av] [bk bv]]] (- av bv))))
+
+(defn drop-low-scoring-bigrams
+  [db size]
+  (loop [root-iter (level/iterator db)
+         q nil
+         cur nil]
+    (if-not (empty? root-iter)
+      (let [[k v] (first root-iter)]
+        (cond
+          (nil? q)
+            (recur root-iter (key-heap k) k)
+          (= (first k) cur)
+            (do
+              (.add q [k v])
+              (recur (rest root-iter) q cur))
+          (>= (.size q) size)
+            (let [top (apply hash-set (.toArray q))]
+              (apply level/delete db
+                (map first
+                  (filter 
+                    #(not (contains? top %))
+                    (take-while
+                      (fn [[k v]] (= (first k) cur))
+                      (level/iterator db cur)))))
+              (recur (rest root-iter) (key-heap size) (first (first root-iter))))
+          :else
+              (recur (rest root-iter) (key-heap size) (first (first root-iter))))))))
 
 (defn get-transition-probs
   [db bigram]
@@ -126,17 +161,6 @@
     (for [[[l r] c] (:counts results)]
       [r (/ total c)])))
 
-(defn pick-bigram
-  [bigrams target-set]
-  (let [ceil (:total bigrams)
-        tokens (:counts bigrams)]
-    (apply max-key
-      (fn [[k c]]
-        (let [score (/ (+ c (* (Math/random) ceil)) 2)]
-          (if (some (partial contains? target-set) k)
-            (+ score ceil)
-            score)))
-      tokens)))
 
 (def punct #{"." "," ";" ":" "?" "!"})
 
@@ -177,17 +201,24 @@
 
 (extend-type String
   PatternTest
-  (test-pattern [pattern target]
+  (test-pattern [pattern ^String target]
     (not (= (.indexOf pattern target) -1))))
 
 (extend-type java.util.regex.Pattern
   PatternTest
-  (test-pattern [pattern target]
+  (test-pattern [pattern ^String target]
     (boolean (re-find pattern target))))
 
+(extend-type clojure.lang.Keyword
+  PatternTest
+  (test-pattern [pattern ^String target]
+    false))
+
 (defn check-target-set
-  [target-set token]
-  (let [res (some #(test-pattern % token) target-set)]
+  [target-set tokens]
+  (let [res (some identity
+              (for [token (filter string? (apply concat tokens))]
+                (some #(test-pattern % token) target-set)))]
     (if res
       [true (disj target-set res)]
       [false target-set])))
@@ -213,6 +244,8 @@
               [in-set target-set] (check-target-set target-set k)
               new-score (+
                           (/ (+ c (* (Math/random) ceil)))
+                          (* -1000
+                            (if (some bracket-pairs k) ceil 0))
                           (if (contains? k :end) (* ceil 5) 0)
                           (if in-set ceil 0))]
           (if (or (nil? res) (> new-score score))
@@ -241,13 +274,15 @@
     (chain db start-key #{})))
 
 (defn single-chain
-  [db start-key]
-  (cons
-    start-key
-    (take-while
-      (fn [[l r]]
-        (not (= r :end)))
-      (chain db start-key))))
+  ([db start-key target-set]
+    (cons
+      start-key
+      (take-while
+        (fn [[l r]]
+          (not (= r :end)))
+        (chain db start-key target-set))))
+  ([db start-key]
+    (single-chain start-key #{})))
 
 (defn add-total-counts
   [db]
@@ -266,22 +301,19 @@
                 (recur (rest iter) l 1))))
           (recur (rest iter) cur cnt))))))
 
+(def ^DictionaryDetokenizer detokenizer
+  (with-open [xml (io/input-stream "data/latin-detokenizer.xml")]
+    (DictionaryDetokenizer. (DetokenizationDictionary. xml))))
+
 (defn join-bigrams
-  [bigrams]
-  (let [b (StringBuilder.)]
-    (doseq [[l r] bigrams]
-      (when (string? l)
-        (if-not (contains? punct l) (.append b " "))
-        (.append b l))
-      (when (string? r)
-        (if-not (contains? punct r) (.append b " "))
-        (.append b r)))
-    (.trim (.toString b))))
+  ^String [bigrams]
+  (let [#^"[Ljava.lang.String;" arr
+        (into-array String (filter string? (flatten bigrams)))]
+    (.detokenize detokenizer arr " ")))
 
 (defn random-chain
-  [db]
-  (with-open [db (level/snapshot db)]
-    (join-bigrams (take 20 (single-chain db [:start "The"])))))
+  [db target-set]
+  (join-bigrams (take 20 (single-chain db [:start "The"] target-set))))
 
 (defn -main
   [& args]
